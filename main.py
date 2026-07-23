@@ -38,12 +38,12 @@ def home():
 def chat(req: ChatRequest):
     check_keys([req.provider])
 
-    reply = call_provider(
-        provider=req.provider,
-        user_text=req.message,
-        history=[],
-        system_prompt=SYSTEM_PROMPT,
-    )
+reply = call_provider(
+    req.provider,
+    req.message,
+    history=[],
+    system_prompt=SYSTEM_PROMPT,
+)
 
     return {
         "provider": req.provider,
