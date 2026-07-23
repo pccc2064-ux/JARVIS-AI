@@ -1,107 +1,192 @@
-"""
-main.py
--------
-Text-in / text-out assistant that can talk to ChatGPT (OpenAI), Claude
-(Anthropic), or Gemini (Google) — you choose the provider per session,
-or switch on the fly by saying "switch to <provider>".
-
-This version has NO microphone or speaker dependency — it works purely
-through typed input and printed output, so it runs anywhere (including
-cloud servers with no audio hardware).
-
-Usage:
-    python main.py                  # interactive text loop, default provider = openai
-    python main.py --provider claude
-    python main.py --provider gemini
-
-Environment variables needed (set the ones for the provider(s) you use):
-    OPENAI_API_KEY
-    ANTHROPIC_API_KEY
-    GOOGLE_API_KEY
-"""
-
+from fastapi import FastAPI
+from pydantic import BaseModel
 import argparse
 import sys
 
 from config import check_keys
 from providers import call_provider
+from audio_io import listen, speak
 
-SYSTEM_PROMPT = "You are a helpful, concise assistant. Keep replies conversational and brief."
+# -----------------------------
+# FastAPI App (for Render)
+# -----------------------------
+
+app = FastAPI(title="Jarvis AI")
+
+SYSTEM_PROMPT = (
+    "You are a helpful, concise voice assistant. "
+    "Keep replies conversational and brief."
+)
 
 EXIT_WORDS = {"exit", "quit", "stop", "goodbye", "bye"}
 
 
+class ChatRequest(BaseModel):
+    message: str
+    provider: str = "openai"
+
+
+@app.get("/")
+def home():
+    return {
+        "status": "online",
+        "message": "Jarvis AI is running successfully!"
+    }
+
+
+@app.post("/chat")
+def chat(req: ChatRequest):
+    check_keys([req.provider])
+
+    reply = call_provider(
+        provider=req.provider,
+        user_text=req.message,
+        history=[],
+        system_prompt=SYSTEM_PROMPT,
+    )
+
+    return {
+        "provider": req.provider,
+        "reply": reply
+    }
+
+
+# -----------------------------
+# Voice Assistant
+# -----------------------------
+
 def parse_args():
-    parser = argparse.ArgumentParser(description="Multi-provider text AI assistant")
+    parser = argparse.ArgumentParser()
+
     parser.add_argument(
         "--provider",
         default="openai",
-        choices=["openai", "chatgpt", "claude", "anthropic", "gemini", "google"],
-        help="Which AI backend to talk to (default: openai)",
+        choices=[
+            "openai",
+            "chatgpt",
+            "claude",
+            "anthropic",
+            "gemini",
+            "google",
+        ],
     )
+
+    parser.add_argument(
+        "--text",
+        action="store_true",
+        help="Use keyboard instead of microphone",
+    )
+
+    parser.add_argument(
+        "--no-voice-out",
+        action="store_true",
+        help="Disable speaking replies",
+    )
+
     return parser.parse_args()
 
 
 def maybe_switch_provider(user_text, current_provider):
-    """Lets the user say things like 'switch to claude' mid-conversation."""
     lowered = user_text.lower().strip()
+
     if lowered.startswith("switch to "):
         candidate = lowered.replace("switch to ", "").strip()
-        if candidate in {"openai", "chatgpt", "claude", "anthropic", "gemini", "google"}:
+
+        if candidate in {
+            "openai",
+            "chatgpt",
+            "claude",
+            "anthropic",
+            "gemini",
+            "google",
+        }:
             return candidate, True
+
     return current_provider, False
 
 
-def main():
+def voice_assistant():
     args = parse_args()
+
     provider = args.provider.lower()
+
     check_keys([provider])
 
-    history = []  # list of {"role": "user"/"assistant", "content": str}
+    history = []
 
-    print(f"[assistant] Ready. Talking to '{provider}'. Type 'exit' to quit.")
-    print("[assistant] Type 'switch to <openai|claude|gemini>' to change providers.")
+    print(f"Talking to {provider}")
 
     while True:
-        # 1. Get typed input
-        try:
-            user_text = input("\nYou: ").strip()
-        except (EOFError, KeyboardInterrupt):
-            break
+
+        if args.text:
+            try:
+                user_text = input("You: ").strip()
+            except (KeyboardInterrupt, EOFError):
+                break
+
+        else:
+            try:
+                user_text = listen()
+            except Exception as e:
+                print(e)
+                continue
+
+            print("You:", user_text)
 
         if not user_text:
-            print("[assistant] (empty input, try again)")
             continue
 
-        if user_text.lower().strip() in EXIT_WORDS:
-            print("[assistant] Goodbye!")
+        if user_text.lower() in EXIT_WORDS:
+            print("Goodbye!")
             break
 
-        # 2. Allow switching providers mid-conversation
-        provider, switched = maybe_switch_provider(user_text, provider)
+        provider, switched = maybe_switch_provider(
+            user_text,
+            provider,
+        )
+
         if switched:
-            print(f"[assistant] Switched to {provider}.")
+            print(f"Switched to {provider}")
+
+            if not args.no_voice_out:
+                speak(f"Switched to {provider}")
+
             continue
 
-        # 3. Call the chosen AI provider
         try:
-            reply = call_provider(provider, user_text, history=history, system_prompt=SYSTEM_PROMPT)
-        except KeyError:
-            print(f"[assistant] Unknown provider '{provider}'.")
-            continue
+            reply = call_provider(
+                provider,
+                user_text,
+                history,
+                SYSTEM_PROMPT,
+            )
+
         except Exception as e:
-            reply = f"Sorry, I hit an error talking to {provider}: {e}"
+            reply = str(e)
 
-        print(f"{provider.capitalize()}: {reply}")
+        print(reply)
 
-        # 4. Update history
-        history.append({"role": "user", "content": user_text})
-        history.append({"role": "assistant", "content": reply})
+        history.append(
+            {
+                "role": "user",
+                "content": user_text,
+            }
+        )
+
+        history.append(
+            {
+                "role": "assistant",
+                "content": reply,
+            }
+        )
+
+        if not args.no_voice_out:
+            speak(reply)
 
 
 if __name__ == "__main__":
     try:
-        main()
+        voice_assistant()
     except KeyboardInterrupt:
-        print("\n[assistant] Interrupted. Bye!")
+        print("\nBye!")
         sys.exit(0)
