@@ -1,14 +1,18 @@
 """
 main.py
 -------
-Voice-in / voice-out assistant that can talk to ChatGPT (OpenAI), Claude
+Text-in / text-out assistant that can talk to ChatGPT (OpenAI), Claude
 (Anthropic), or Gemini (Google) — you choose the provider per session,
 or switch on the fly by saying "switch to <provider>".
 
+This version has NO microphone or speaker dependency — it works purely
+through typed input and printed output, so it runs anywhere (including
+cloud servers with no audio hardware).
+
 Usage:
-    python main.py                  # interactive voice loop, default provider = openai
+    python main.py                  # interactive text loop, default provider = openai
     python main.py --provider claude
-    python main.py --text           # type instead of speaking (for testing without a mic)
+    python main.py --provider gemini
 
 Environment variables needed (set the ones for the provider(s) you use):
     OPENAI_API_KEY
@@ -21,30 +25,19 @@ import sys
 
 from config import check_keys
 from providers import call_provider
-from audio_io import listen, speak
 
-SYSTEM_PROMPT = "You are a helpful, concise voice assistant. Keep replies conversational and brief."
+SYSTEM_PROMPT = "You are a helpful, concise assistant. Keep replies conversational and brief."
 
 EXIT_WORDS = {"exit", "quit", "stop", "goodbye", "bye"}
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="Multi-provider voice AI assistant")
+    parser = argparse.ArgumentParser(description="Multi-provider text AI assistant")
     parser.add_argument(
         "--provider",
         default="openai",
         choices=["openai", "chatgpt", "claude", "anthropic", "gemini", "google"],
         help="Which AI backend to talk to (default: openai)",
-    )
-    parser.add_argument(
-        "--text",
-        action="store_true",
-        help="Use typed input instead of the microphone (handy for testing without audio hardware)",
-    )
-    parser.add_argument(
-        "--no-voice-out",
-        action="store_true",
-        help="Print replies instead of speaking them aloud",
     )
     return parser.parse_args()
 
@@ -66,26 +59,18 @@ def main():
 
     history = []  # list of {"role": "user"/"assistant", "content": str}
 
-    print(f"[assistant] Ready. Talking to '{provider}'. Say/type 'exit' to quit.")
-    print("[assistant] Say/type 'switch to <openai|claude|gemini>' to change providers.")
+    print(f"[assistant] Ready. Talking to '{provider}'. Type 'exit' to quit.")
+    print("[assistant] Type 'switch to <openai|claude|gemini>' to change providers.")
 
     while True:
-        # 1. Get input (voice or typed)
-        if args.text:
-            try:
-                user_text = input("\nYou: ").strip()
-            except (EOFError, KeyboardInterrupt):
-                break
-        else:
-            try:
-                user_text = listen()
-            except Exception as e:
-                print(f"[audio] Could not capture audio: {e}")
-                continue
-            print(f"You said: {user_text}")
+        # 1. Get typed input
+        try:
+            user_text = input("\nYou: ").strip()
+        except (EOFError, KeyboardInterrupt):
+            break
 
         if not user_text:
-            print("[assistant] (didn't catch that, try again)")
+            print("[assistant] (empty input, try again)")
             continue
 
         if user_text.lower().strip() in EXIT_WORDS:
@@ -95,10 +80,7 @@ def main():
         # 2. Allow switching providers mid-conversation
         provider, switched = maybe_switch_provider(user_text, provider)
         if switched:
-            msg = f"Switched to {provider}."
-            print(f"[assistant] {msg}")
-            if not args.no_voice_out:
-                speak(msg)
+            print(f"[assistant] Switched to {provider}.")
             continue
 
         # 3. Call the chosen AI provider
@@ -115,10 +97,6 @@ def main():
         # 4. Update history
         history.append({"role": "user", "content": user_text})
         history.append({"role": "assistant", "content": reply})
-
-        # 5. Speak the reply
-        if not args.no_voice_out:
-            speak(reply)
 
 
 if __name__ == "__main__":
